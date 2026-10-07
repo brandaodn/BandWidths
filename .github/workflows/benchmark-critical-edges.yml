@@ -1,0 +1,88 @@
+name: Critical-edge PPO comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - article_code/benchmark_critical_edges.py
+      - .github/workflows/benchmark-critical-edges.yml
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk01.mtx,bcsstk02.mtx,bcsstk04.mtx,bcsstk05.mtx,bcsstk06.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Compare policies
+        working-directory: article_code
+        run: |
+          python benchmark_critical_edges.py             --data-dir data/artigo_datas             --seeds 10             --episodes 15             --steps 30             --output /tmp/critical.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: critical-${{ matrix.instance }}
+          path: /tmp/critical.csv
+
+  aggregate:
+    needs: compare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "critical-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+
+          df=pd.concat([pd.read_csv(f) for f in glob.glob("artifacts/**/critical.csv",recursive=True)],ignore_index=True)
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              p=g.pivot(index="seed",columns="mode",values="best_bw")
+              old=p["legacy_mixed"].to_numpy()
+              new=p["edge_guided"].to_numpy()
+              rcm=int(g.rcm_bw.iloc[0])
+              if np.all(old==new):
+                  stat,pv=0.0,1.0
+              else:
+                  try: stat,pv=wilcoxon(old,new,zero_method="wilcox",alternative="greater")
+                  except ValueError: stat,pv=np.nan,np.nan
+              rows.append({
+                  "instance":inst,"rcm_bw":rcm,
+                  "legacy_mean_bw":float(old.mean()),
+                  "legacy_best_bw":int(old.min()),
+                  "legacy_improved_runs":int((old<rcm).sum()),
+                  "edge_mean_bw":float(new.mean()),
+                  "edge_best_bw":int(new.min()),
+                  "edge_improved_runs":int((new<rcm).sum()),
+                  "edge_wins":int((new<old).sum()),
+                  "ties":int((new==old).sum()),
+                  "legacy_wins":int((new>old).sum()),
+                  "wilcoxon_p_edge_better":float(pv),
+              })
+          out=pd.DataFrame(rows)
+          out.to_csv("critical_edge_summary.csv",index=False)
+          df.to_csv("critical_edge_raw.csv",index=False)
+          print(out.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: critical-edge-results
+          path: |
+            critical_edge_summary.csv
+            critical_edge_raw.csv
