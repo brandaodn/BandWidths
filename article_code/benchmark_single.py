@@ -129,9 +129,9 @@ def main():
         )
 
     with open(args.output, "w") as f:
-        json.dump(rows, f, indent=2)
+        json.dump(rows, f, indent=2, default=lambda value: value.item() if hasattr(value, "item") else str(value))
 
-    print(json.dumps(rows, indent=2))
+    print(json.dumps(rows, indent=2, default=lambda value: value.item() if hasattr(value, "item") else str(value)))
 
 
 if __name__ == "__main__":
