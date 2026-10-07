@@ -51,10 +51,10 @@ jobs:
             --train-steps 300 \
             --eval-steps 60 \
             --output /tmp/dqn_v2.csv \
-            \${{ matrix.instance }}
+            ${{ matrix.instance }}
       - uses: actions/upload-artifact@v4
         with:
-          name: dqn-v2-\${{ matrix.instance }}
+          name: dqn-v2-${{ matrix.instance }}
           path: /tmp/dqn_v2.csv
 
   aggregate:
