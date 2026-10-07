@@ -67,9 +67,11 @@ def run_instance(path, iterations, seed):
         deep=True,
     )
 
-    # Use the same initial reference for both versions so the comparison
-    # targets implementation behavior rather than the old hard-coded 100000.
-    env = Env(original_bw)
+    # Preserve legacy initialization when running the old implementation.
+    # The old Env does not initialize best_graph/best_solution and main.py used 100000.
+    candidate_env = Env(original_bw)
+    legacy = not hasattr(candidate_env, "best_graph")
+    env = Env(100000) if legacy else candidate_env
     state = env.get_initial_state()
     best_bw = original_bw
 
