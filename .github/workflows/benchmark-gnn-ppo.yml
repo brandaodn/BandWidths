@@ -1,0 +1,103 @@
+name: RCM vs GNN PPO experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - article_code/benchmark_gnn_ppo.py
+      - .github/workflows/benchmark-gnn-ppo.yml
+
+jobs:
+  experiment:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance:
+          - bcsstk01.mtx
+          - bcsstk02.mtx
+          - bcsstk04.mtx
+          - bcsstk05.mtx
+          - bcsstk06.mtx
+          - bcsstk07.mtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run experiment
+        working-directory: article_code
+        run: |
+          python benchmark_gnn_ppo.py             --data-dir data/artigo_datas             --seeds 10             --episodes 10             --steps 20             --output /tmp/results.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gnnppo-${{ matrix.instance }}
+          path: /tmp/results.csv
+
+  aggregate:
+    needs: experiment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "gnnppo-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate results
+        run: |
+          python - <<'PY'
+          import glob, json
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+
+          df=pd.concat([pd.read_csv(f) for f in glob.glob("artifacts/**/results.csv",recursive=True)],ignore_index=True)
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              rcm=g["rcm_bw"].to_numpy()
+              ppo=g["ppo_best_bw"].to_numpy()
+              diff=rcm-ppo
+              if np.all(diff==0):
+                  stat,p=0.0,1.0
+              else:
+                  try:
+                      stat,p=wilcoxon(rcm,ppo,zero_method="wilcox",alternative="greater")
+                  except ValueError:
+                      stat,p=np.nan,np.nan
+              rows.append({
+                  "instance":inst,
+                  "nodes":int(g["nodes"].iloc[0]),
+                  "edges":int(g["edges"].iloc[0]),
+                  "rcm_bw":int(rcm[0]),
+                  "ppo_mean_bw":float(ppo.mean()),
+                  "ppo_std_bw":float(ppo.std(ddof=1)),
+                  "ppo_median_bw":float(np.median(ppo)),
+                  "ppo_best_bw":int(ppo.min()),
+                  "improved_runs":int((ppo<rcm).sum()),
+                  "tied_runs":int((ppo==rcm).sum()),
+                  "worse_runs":int((ppo>rcm).sum()),
+                  "mean_improvement":float(diff.mean()),
+                  "mean_improvement_pct":float((100*diff/rcm).mean()),
+                  "wilcoxon_stat":float(stat),
+                  "wilcoxon_p_one_sided":float(p),
+                  "mean_time_s":float(g["elapsed_s"].mean()),
+              })
+          summary=pd.DataFrame(rows)
+          summary.to_csv("gnnppo_summary.csv",index=False)
+          df.to_csv("gnnppo_raw.csv",index=False)
+          with open("gnnppo_summary.json","w") as f:
+              json.dump(rows,f,indent=2)
+          print(summary.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gnnppo-experiment-results
+          path: |
+            gnnppo_summary.csv
+            gnnppo_summary.json
+            gnnppo_raw.csv
