@@ -1,0 +1,51 @@
+name: DQN v2 - BP retry
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/benchmark-dqn-v2-bp-retry.yml
+      - article_code/modules/utils/read_Instances.py
+      - article_code/benchmark_dqn_v2_confirm.py
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        instance:
+          - bp_0.mtx
+          - bp_200.mtx
+          - bp_400.mtx
+          - bp_600.mtx
+          - bp_800.mtx
+          - bp_1000.mtx
+          - bp_1200.mtx
+          - bp_1400.mtx
+          - bp_1600.mtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 30-seed benchmark
+        working-directory: article_code
+        run: |
+          python benchmark_dqn_v2_confirm.py \
+            --data-dir data/artigo_datas \
+            --instance ${{ matrix.instance }} \
+            --seeds 30 \
+            --train-steps 300 \
+            --eval-steps 60 \
+            --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-bp-${{ matrix.instance }}
+          path: /tmp/result.csv
