@@ -39,6 +39,20 @@ class TestGNNPPO(unittest.TestCase):
         self.assertIn(1,kinds)
         self.assertTrue(any(distance > 1 for distance in distances))
 
+    def test_critical_edge_guided_actions_exist(self):
+        import torch
+        G=nx.Graph()
+        G.add_nodes_from(range(1,9))
+        G.add_edges_from([(1,8),(1,2),(2,3),(3,4),(4,5),(5,6),(6,7)])
+        env=BandwidthEnv(G,device=torch.device("cpu"))
+        env.order=[1,2,3,4,5,6,7,8]
+        env.current_bw=canonical_bandwidth(G,env.order)
+        env._build_action_candidates()
+        pos={v:i for i,v in enumerate(env.order)}
+        i,j=pos[1],pos[8]
+        direct={(kind,a,b) for kind,a,b in env.action_specs}
+        self.assertTrue((0,i,j) in direct or (1,i,j) in direct)
+
     def test_ppo_smoke(self):
         G=nx.cycle_graph(range(1,9))
         trainer=PPOTrainer(G,device=__import__("torch").device("cpu"),epochs=1)
