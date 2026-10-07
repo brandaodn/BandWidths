@@ -1,0 +1,105 @@
+name: DQN v2 screening
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - article_code/agent_v2.py
+      - article_code/dqn_v2.py
+      - article_code/benchmark_dqn_v2.py
+      - article_code/tests/test_dqn_v2.py
+      - .github/workflows/benchmark-dqn-v2.yml
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run tests
+        working-directory: article_code
+        run: python -m unittest tests.test_dqn_v2 -v
+
+  screen:
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk01.mtx,bcsstk05.mtx,bcsstk06.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run screening
+        working-directory: article_code
+        run: |
+          python benchmark_dqn_v2.py \
+            --data-dir data/artigo_datas \
+            --seeds 5 \
+            --train-steps 300 \
+            --eval-steps 60 \
+            --output /tmp/dqn_v2.csv \
+            \${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-\${{ matrix.instance }}
+          path: /tmp/dqn_v2.csv
+
+  aggregate:
+    needs: screen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "dqn-v2-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob, pandas as pd
+          files=glob.glob("artifacts/**/dqn_v2.csv",recursive=True)
+          df=pd.concat([pd.read_csv(f) for f in files],ignore_index=True)
+          summary=df.groupby("instance").agg(
+              original_bw=("original_bw","first"),
+              rcm_bw=("rcm_bw","first"),
+              dqn_train_mean=("dqn_train_best","mean"),
+              dqn_train_std=("dqn_train_best","std"),
+              dqn_train_best=("dqn_train_best","min"),
+              random_train_mean=("random_train_best","mean"),
+              dqn_eval_mean=("dqn_eval_best","mean"),
+              dqn_eval_std=("dqn_eval_best","std"),
+              dqn_eval_best=("dqn_eval_best","min"),
+              random_eval_mean=("random_eval_best","mean"),
+              epsilon_final=("epsilon_final","mean"),
+              train_improvements=("train_improvements","mean"),
+              eval_improvements=("eval_improvements","mean"),
+          ).reset_index()
+          action_cols=[c for c in df.columns if c.startswith("tail_") or c.startswith("eval_")]
+          actions=df.groupby("instance")[action_cols].mean().reset_index()
+          summary.to_csv("dqn_v2_summary.csv",index=False)
+          actions.to_csv("dqn_v2_action_distribution.csv",index=False)
+          df.to_csv("dqn_v2_raw.csv",index=False)
+          print(summary.to_string(index=False))
+          print("\\nACTION DISTRIBUTION\\n")
+          print(actions.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-results
+          path: |
+            dqn_v2_summary.csv
+            dqn_v2_action_distribution.csv
+            dqn_v2_raw.csv
