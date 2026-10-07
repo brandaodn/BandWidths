@@ -105,7 +105,7 @@ def run_instance(path, iterations, seed):
         "original_bw": original_bw,
         "best_bw": best_bw,
         "reduction_pct": 0.0 if original_bw == 0 else 100.0 * (original_bw - best_bw) / original_bw,
-        "elapsed_s": elapsed,
+        "elapsed_s": float(elapsed),
     }
 
 
