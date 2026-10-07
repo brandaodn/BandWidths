@@ -1,0 +1,134 @@
+name: Parallel statistical DQN benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix-dqn]
+    paths:
+      - .github/workflows/benchmark-statistical-parallel.yml
+
+jobs:
+  matrix-benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance:
+          - bcsstk01.mtx
+          - bcsstk02.mtx
+          - bcsstk04.mtx
+          - bcsstk05.mtx
+          - bcsstk06.mtx
+          - bcsstk07.mtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Create worktrees
+        run: |
+          git worktree add /tmp/bw-main origin/main
+          git worktree add /tmp/bw-fix HEAD
+          cp article_code/benchmark_single.py /tmp/bw-main/article_code/benchmark_single.py
+          cp article_code/benchmark_experiment.py /tmp/bw-main/article_code/benchmark_experiment.py
+      - name: Run old implementation
+        working-directory: /tmp/bw-main/article_code
+        run: |
+          python benchmark_experiment.py             --data-dir data/artigo_datas             --iterations 30             --seeds 30             --output /tmp/old.csv             ${{ matrix.instance }}
+      - name: Run fixed implementation
+        working-directory: /tmp/bw-fix/article_code
+        run: |
+          python benchmark_experiment.py             --data-dir data/artigo_datas             --iterations 30             --seeds 30             --output /tmp/fixed.csv             ${{ matrix.instance }}
+      - name: Pair results
+        run: |
+          mkdir out
+          python - <<'PY'
+          import pandas as pd
+          old=pd.read_csv("/tmp/old.csv")
+          new=pd.read_csv("/tmp/fixed.csv")
+          merged=old.merge(new,on=["instance","seed"],suffixes=("_old","_fixed"))
+          merged.to_csv("out/paired.csv",index=False)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paired-${{ matrix.instance }}
+          path: out/paired.csv
+
+  aggregate:
+    needs: matrix-benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: paired-*
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy pandas scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob, json
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+
+          files=glob.glob("artifacts/**/paired.csv",recursive=True)
+          merged=pd.concat([pd.read_csv(f) for f in files],ignore_index=True)
+          rows=[]
+          for instance,g in merged.groupby("instance"):
+              old_bw=g["best_bw_old"].to_numpy()
+              new_bw=g["best_bw_fixed"].to_numpy()
+              diff=old_bw-new_bw
+              if np.all(diff==0):
+                  stat,p=0.0,1.0
+              else:
+                  stat,p=wilcoxon(old_bw,new_bw,zero_method="wilcox",alternative="two-sided")
+              old_t=g["elapsed_s_old"].to_numpy()
+              new_t=g["elapsed_s_fixed"].to_numpy()
+              rows.append({
+                  "instance":instance,
+                  "nodes":int(g["nodes_fixed"].iloc[0]),
+                  "edges":int(g["edges_fixed"].iloc[0]),
+                  "original_bw":int(g["original_bw_fixed"].iloc[0]),
+                  "old_mean_bw":float(old_bw.mean()),
+                  "old_std_bw":float(old_bw.std(ddof=1)),
+                  "old_median_bw":float(np.median(old_bw)),
+                  "old_best_bw":int(old_bw.min()),
+                  "fixed_mean_bw":float(new_bw.mean()),
+                  "fixed_std_bw":float(new_bw.std(ddof=1)),
+                  "fixed_median_bw":float(np.median(new_bw)),
+                  "fixed_best_bw":int(new_bw.min()),
+                  "fixed_wins":int((new_bw<old_bw).sum()),
+                  "ties":int((new_bw==old_bw).sum()),
+                  "old_wins":int((new_bw>old_bw).sum()),
+                  "wilcoxon_stat":float(stat),
+                  "wilcoxon_p":float(p),
+                  "old_mean_time_s":float(old_t.mean()),
+                  "old_std_time_s":float(old_t.std(ddof=1)),
+                  "fixed_mean_time_s":float(new_t.mean()),
+                  "fixed_std_time_s":float(new_t.std(ddof=1)),
+                  "time_change_pct":float(100*(new_t.mean()-old_t.mean())/old_t.mean()),
+              })
+          s=pd.DataFrame(rows)
+          s.to_csv("statistical_summary.csv",index=False)
+          merged.to_csv("paired_runs.csv",index=False)
+          with open("statistical_summary.json","w") as f: json.dump(rows,f,indent=2)
+          print(s.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parallel-statistical-results
+          path: |
+            statistical_summary.csv
+            statistical_summary.json
+            paired_runs.csv
