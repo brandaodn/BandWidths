@@ -28,6 +28,17 @@ class TestGNNPPO(unittest.TestCase):
         env.step(1)
         self.assertLessEqual(env.best_bw,start)
 
+    def test_expanded_action_space_contains_swap_and_relocation(self):
+        import torch
+        G=nx.path_graph(range(1,41))
+        env=BandwidthEnv(G,device=torch.device("cpu"))
+        env.reset()
+        kinds={kind for kind,_,_ in env.action_specs}
+        distances={abs(i-j) for _,i,j in env.action_specs}
+        self.assertIn(0,kinds)
+        self.assertIn(1,kinds)
+        self.assertTrue(any(distance > 1 for distance in distances))
+
     def test_ppo_smoke(self):
         G=nx.cycle_graph(range(1,9))
         trainer=PPOTrainer(G,device=__import__("torch").device("cpu"),epochs=1)
