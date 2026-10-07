@@ -150,34 +150,68 @@ class BandwidthEnv:
         self.best_order = list(self.order)
         return self.state()
 
-    def _critical_positions(self):
+    def _critical_edges(self):
+        """Return edges that currently attain, or nearly attain, the bandwidth."""
         pos = {v: i for i, v in enumerate(self.order)}
-        scored = []
-        for i, v in enumerate(self.order):
-            local = max(
-                (abs(i - pos[u]) for u in self.G.neighbors(v)),
-                default=0,
-            )
-            scored.append((local, self.G.degree(v), -i, i))
-        scored.sort(reverse=True)
-        k = min(len(scored), self.critical_nodes)
-        return [item[-1] for item in scored[:k]]
+        spans = []
+        for u, v in self.G.edges():
+            span = abs(pos[u] - pos[v])
+            spans.append((span, u, v))
+
+        if not spans:
+            return []
+
+        spans.sort(reverse=True)
+        max_span = spans[0][0]
+        threshold = max(1, max_span - 1)
+
+        critical = [(u, v, span) for span, u, v in spans if span >= threshold]
+        return critical[: self.critical_nodes]
 
     def _build_action_candidates(self):
         n = len(self.order)
+        pos = {v: i for i, v in enumerate(self.order)}
         specs = set()
 
-        for i in self._critical_positions():
-            for offset in self.offsets:
-                for sign in (-1, 1):
-                    j = i + sign * offset
-                    if j < 0 or j >= n or j == i:
-                        continue
-                    if self.enable_swap:
-                        specs.add((0, i, j))
-                    if self.enable_relocation:
-                        specs.add((1, i, j))
+        # Focus on endpoints of edges that currently determine (or almost
+        # determine) the bandwidth. Each endpoint can move toward the other
+        # endpoint or perform larger exploratory jumps.
+        for u, v, _ in self._critical_edges():
+            iu, iv = pos[u], pos[v]
+            endpoint_pairs = [(iu, iv), (iv, iu)]
 
+            for i, target in endpoint_pairs:
+                # Direct critical-edge repair candidate.
+                if i != target:
+                    if self.enable_swap:
+                        specs.add((0, i, target))
+                    if self.enable_relocation:
+                        specs.add((1, i, target))
+
+                direction = 1 if target > i else -1
+                distance_to_target = abs(target - i)
+
+                for offset in self.offsets:
+                    # Prefer moving toward the opposite critical endpoint.
+                    step = min(offset, distance_to_target)
+                    j = i + direction * step
+                    if 0 <= j < n and j != i:
+                        if self.enable_swap:
+                            specs.add((0, i, j))
+                        if self.enable_relocation:
+                            specs.add((1, i, j))
+
+                    # Also keep a small symmetric exploration component.
+                    for sign in (-1, 1):
+                        j = i + sign * offset
+                        if j < 0 or j >= n or j == i:
+                            continue
+                        if self.enable_swap:
+                            specs.add((0, i, j))
+                        if self.enable_relocation:
+                            specs.add((1, i, j))
+
+        # Fallback for edgeless/small graphs.
         if not specs and n >= 2:
             specs.add((0, 0, 1))
 
