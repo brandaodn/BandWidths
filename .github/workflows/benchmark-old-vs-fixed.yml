@@ -1,0 +1,78 @@
+name: Compare old vs fixed DQN
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix-dqn]
+    paths:
+      - article_code/benchmark_single.py
+      - .github/workflows/benchmark-old-vs-fixed.yml
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+
+      - name: Create worktrees
+        run: |
+          git worktree add /tmp/bw-main origin/main
+          git worktree add /tmp/bw-fix HEAD
+          cp article_code/benchmark_single.py /tmp/bw-main/article_code/benchmark_single.py
+
+      - name: Benchmark old implementation
+        working-directory: /tmp/bw-main/article_code
+        run: |
+          python benchmark_single.py             --data-dir data/artigo_datas             --iterations 10             --seed 123             --output /tmp/main_results.json             bcsstk01.mtx bcsstk02.mtx bcsstk04.mtx bcsstk05.mtx bcsstk06.mtx bcsstk07.mtx
+
+      - name: Benchmark fixed implementation
+        working-directory: /tmp/bw-fix/article_code
+        run: |
+          python benchmark_single.py             --data-dir data/artigo_datas             --iterations 10             --seed 123             --output /tmp/fix_results.json             bcsstk01.mtx bcsstk02.mtx bcsstk04.mtx bcsstk05.mtx bcsstk06.mtx bcsstk07.mtx
+
+      - name: Build comparison
+        run: |
+          python - <<'PY'
+          import csv, json
+          old = {x["instance"]: x for x in json.load(open("/tmp/main_results.json"))}
+          new = {x["instance"]: x for x in json.load(open("/tmp/fix_results.json"))}
+          fields = [
+              "instance","nodes","edges","original_bw",
+              "old_best_bw","fixed_best_bw",
+              "old_reduction_pct","fixed_reduction_pct",
+              "old_elapsed_s","fixed_elapsed_s"
+          ]
+          rows=[]
+          for name in sorted(old):
+              a,b=old[name],new[name]
+              rows.append({
+                  "instance":name,"nodes":b["nodes"],"edges":b["edges"],
+                  "original_bw":b["original_bw"],
+                  "old_best_bw":a["best_bw"],"fixed_best_bw":b["best_bw"],
+                  "old_reduction_pct":round(a["reduction_pct"],4),
+                  "fixed_reduction_pct":round(b["reduction_pct"],4),
+                  "old_elapsed_s":round(a["elapsed_s"],4),
+                  "fixed_elapsed_s":round(b["elapsed_s"],4),
+              })
+          with open("benchmark_comparison.csv","w",newline="") as f:
+              w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(rows)
+          print(json.dumps(rows,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: old-vs-fixed-benchmark
+          path: benchmark_comparison.csv
