@@ -18,7 +18,6 @@ from enviroment import Env
 from centralities import get_centrality_node
 from modules.graph.Grafo import GrafoListaAdj
 from modules.utils import read_Instances
-from modules.utils.handle_labels import set_bandwidth
 
 
 CENTRALITIES = {
@@ -48,7 +47,8 @@ def run_instance(path, iterations, seed):
     for u, v in edges:
         graph.AdicionarAresta(u, v)
 
-    original_bw = set_bandwidth(graph_nx)
+    positions = {node: idx for idx, node in enumerate(graph_nx.nodes())}
+    original_bw = max((abs(positions[u] - positions[v]) for u, v in graph_nx.edges()), default=0)
     centrality_maps = {
         name: get_centrality_node(graph_nx, config)
         for name, config in CENTRALITIES.items()
