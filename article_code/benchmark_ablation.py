@@ -33,7 +33,7 @@ def build(path):
     maps={name:get_centrality_node(G,cfg) for name,cfg in CENTRALITIES.items()}
     return nnodes,nedges,G,g,original,maps
 
-def eval_centrality(g,maps,name,budget):
+def eval_centrality(g,maps,name,budget,original):
     best=float("inf")
     # centrality_heuristic does iter_max constructions. Match DQN budget approximately:
     # DQN step internally performs 5 calls x 3 constructions = 15 constructions.
@@ -41,11 +41,11 @@ def eval_centrality(g,maps,name,budget):
     cost,_,_,_=centrality_heuristic(
         graph=g,centrality_values=maps[name],cent_str=name,
         alpha=0.3,iter_max=constructions,centralities=CENTRALITIES)
-    return int(cost)
+    return int(min(original, cost))
 
-def eval_random(g,maps,budget,seed):
+def eval_random(g,maps,budget,seed,original):
     rng=random.Random(seed)
-    best=float("inf")
+    best=original
     names=list(CENTRALITIES)
     for _ in range(budget):
         name=rng.choice(names)
@@ -57,10 +57,10 @@ def eval_random(g,maps,budget,seed):
             best=min(best,cost)
     return int(best)
 
-def eval_rcm(G,g):
+def eval_rcm(G,g,original):
     order=list(nx.utils.reverse_cuthill_mckee_ordering(G))
     labels={node:i+1 for i,node in enumerate(order)}
-    return int(Bf_graph(g,labels))
+    return int(min(original, Bf_graph(g,labels)))
 
 def eval_dqn(g,maps,original,budget):
     names=list(CENTRALITIES)
@@ -84,17 +84,17 @@ def main():
     for fname in a.instances:
         path=os.path.join(a.data_dir,fname)
         nnodes,nedges,G,g,orig,maps=build(path)
-        rcm=eval_rcm(G,g)
+        rcm=eval_rcm(G,g,orig)
         for seed in range(1,a.seeds+1):
             random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
             methods={}
             methods["DQN"]=eval_dqn(g,maps,orig,a.budget)
             random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
-            methods["RandomCentrality"]=eval_random(g,maps,a.budget,seed)
+            methods["RandomCentrality"]=eval_random(g,maps,a.budget,seed,orig)
             methods["RCM"]=rcm
             for name in CENTRALITIES:
                 random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
-                methods[name]=eval_centrality(g,maps,name,a.budget)
+                methods[name]=eval_centrality(g,maps,name,a.budget,orig)
             for method,bw in methods.items():
                 rows.append({"instance":fname,"seed":seed,"method":method,"nodes":nnodes,"edges":nedges,
                              "original_bw":orig,"best_bw":bw,
