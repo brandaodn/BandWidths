@@ -1,0 +1,97 @@
+name: PPO action-space comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - article_code/benchmark_action_space.py
+      - .github/workflows/benchmark-action-space.yml
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk01.mtx,bcsstk02.mtx,bcsstk04.mtx,bcsstk05.mtx,bcsstk06.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Compare adjacent vs mixed
+        working-directory: article_code
+        run: |
+          python benchmark_action_space.py             --data-dir data/artigo_datas             --seeds 10             --episodes 15             --steps 30             --output /tmp/action_space.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: action-space-${{ matrix.instance }}
+          path: /tmp/action_space.csv
+
+  aggregate:
+    needs: compare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "action-space-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+
+          df = pd.concat(
+              [pd.read_csv(f) for f in glob.glob("artifacts/**/action_space.csv", recursive=True)],
+              ignore_index=True,
+          )
+          rows = []
+          for inst, g in df.groupby("instance"):
+              pivot = g.pivot(index="seed", columns="mode", values="best_bw")
+              adj = pivot["adjacent"].to_numpy()
+              mix = pivot["mixed"].to_numpy()
+              rcm = int(g.rcm_bw.iloc[0])
+
+              if np.all(adj == mix):
+                  stat, p = 0.0, 1.0
+              else:
+                  try:
+                      stat, p = wilcoxon(adj, mix, zero_method="wilcox", alternative="greater")
+                  except ValueError:
+                      stat, p = np.nan, np.nan
+
+              rows.append({
+                  "instance": inst,
+                  "rcm_bw": rcm,
+                  "adjacent_mean_bw": float(adj.mean()),
+                  "adjacent_best_bw": int(adj.min()),
+                  "adjacent_improved_runs": int((adj < rcm).sum()),
+                  "mixed_mean_bw": float(mix.mean()),
+                  "mixed_best_bw": int(mix.min()),
+                  "mixed_improved_runs": int((mix < rcm).sum()),
+                  "mixed_wins": int((mix < adj).sum()),
+                  "ties": int((mix == adj).sum()),
+                  "adjacent_wins": int((mix > adj).sum()),
+                  "wilcoxon_p_mixed_better": float(p),
+              })
+
+          out = pd.DataFrame(rows)
+          out.to_csv("action_space_summary.csv", index=False)
+          df.to_csv("action_space_raw.csv", index=False)
+          print(out.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: action-space-results
+          path: |
+            action_space_summary.csv
+            action_space_raw.csv
