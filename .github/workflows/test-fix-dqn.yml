@@ -19,10 +19,15 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy networkx scipy pandas torch
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
       - name: Compile changed modules
         run: |
-          python -m py_compile             article_code/agent.py             article_code/enviroment.py             article_code/main.py             article_code/modules/utils/handle_labels.py
+          python -m py_compile \
+            article_code/agent.py \
+            article_code/enviroment.py \
+            article_code/main.py \
+            article_code/modules/utils/handle_labels.py
       - name: Run focused unit tests
         working-directory: article_code
         run: python -m unittest discover -s tests -p "test_*.py" -v
