@@ -1,0 +1,87 @@
+name: DQN centrality ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix-dqn]
+    paths:
+      - article_code/benchmark_ablation.py
+      - .github/workflows/benchmark-ablation.yml
+
+jobs:
+  ablation:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk01.mtx,bcsstk02.mtx,bcsstk04.mtx,bcsstk05.mtx,bcsstk06.mtx,bcsstk07.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run ablation
+        working-directory: article_code
+        run: |
+          python benchmark_ablation.py             --data-dir data/artigo_datas             --seeds 30             --budget 30             --output /tmp/ablation.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ablation-${{ matrix.instance }}
+          path: /tmp/ablation.csv
+
+  aggregate:
+    needs: ablation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "ablation-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob, pandas as pd, numpy as np
+          from scipy.stats import wilcoxon
+          files=glob.glob("artifacts/**/ablation.csv",recursive=True)
+          df=pd.concat([pd.read_csv(f) for f in files],ignore_index=True)
+          summary=df.groupby(["instance","method"]).agg(
+              mean_bw=("best_bw","mean"),std_bw=("best_bw","std"),
+              median_bw=("best_bw","median"),best_bw=("best_bw","min"),
+              mean_reduction_pct=("reduction_pct","mean")
+          ).reset_index()
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              pivot=g.pivot(index="seed",columns="method",values="best_bw")
+              dqn=pivot["DQN"].to_numpy()
+              for method in pivot.columns:
+                  other=pivot[method].to_numpy()
+                  if np.all(dqn==other): stat,p=0.0,1.0
+                  else:
+                      try: stat,p=wilcoxon(dqn,other,zero_method="wilcox",alternative="two-sided")
+                      except ValueError: stat,p=np.nan,np.nan
+                  rows.append({
+                      "instance":inst,"method_vs_dqn":method,
+                      "dqn_wins":int((dqn<other).sum()),
+                      "ties":int((dqn==other).sum()),
+                      "method_wins":int((dqn>other).sum()),
+                      "wilcoxon_stat":float(stat),"wilcoxon_p":float(p),
+                  })
+          tests=pd.DataFrame(rows)
+          summary.to_csv("ablation_summary.csv",index=False)
+          tests.to_csv("ablation_vs_dqn.csv",index=False)
+          df.to_csv("ablation_raw.csv",index=False)
+          print(summary.to_string(index=False))
+          print("\nPAIRWISE VS DQN\n",tests.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ablation-results
+          path: |
+            ablation_summary.csv
+            ablation_vs_dqn.csv
+            ablation_raw.csv
