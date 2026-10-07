@@ -1,0 +1,86 @@
+name: Instance reader regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - article_code/modules/utils/read_Instances.py
+      - article_code/tests/test_instance_reader.py
+      - .github/workflows/test-instance-reader-regression.yml
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: pip install scipy numpy networkx
+      - name: Run parser regression
+        working-directory: article_code
+        run: |
+          python - <<'PY'
+          import os
+          from collections import defaultdict
+          from modules.utils import read_Instances
+          from modules.utils.handle_labels import bandwidth
+
+          DATA="data/artigo_datas"
+          FILES=[
+            "bcsstk01.mtx","bcsstk04.mtx","bcsstk05.mtx","bcsstk06.mtx",
+            "lshp_265.mtx","lshp_406.mtx","lshp1009.mtx","lshp1270.mtx"
+          ]
+
+          def old_load(filename):
+              edges=[]
+              neighbours=defaultdict(list)
+              flag=True
+              with open(filename,"r") as f:
+                  for line in f:
+                      parts=line.split()
+                      if not parts or parts[0].startswith("%"):
+                          continue
+                      if flag:
+                          nnodes,value,nedges=map(int,parts)
+                          flag=False
+                      else:
+                          e1,e2=int(float(parts[0])),int(float(parts[1]))
+                          if e1!=e2:
+                              edges.append((min(e1,e2),max(e1,e2)))
+                              neighbours[e1].append(e2)
+                              neighbours[e2].append(e1)
+                          else:
+                              nedges-=1
+              return nnodes,nedges,edges,neighbours
+
+          def bw_from_edges(n,edges):
+              # classical bandwidth under original 1..n ordering
+              return max((abs(u-v) for u,v in edges), default=0)
+
+          failed=False
+          for fn in FILES:
+              p=os.path.join(DATA,fn)
+              on,om,oe,onbr=old_load(p)
+              nn,nm,ne,nnbr,_,_=read_Instances.load_instance(p)
+              old_set=set(oe)
+              new_set=set(ne)
+              old_bw=bw_from_edges(on,old_set)
+              new_bw=bw_from_edges(nn,new_set)
+              same=(on==nn and old_set==new_set and old_bw==new_bw)
+              print(fn, {
+                  "old_n":on,"new_n":nn,
+                  "old_raw_edges":len(oe),"old_unique_edges":len(old_set),
+                  "new_edges":len(ne),
+                  "old_bw":old_bw,"new_bw":new_bw,
+                  "same_graph_and_bw":same
+              })
+              if not same:
+                  failed=True
+          if failed:
+              raise SystemExit("Regression mismatch detected")
+          PY
+      - name: Run reader tests
+        working-directory: article_code
+        run: python -m unittest tests.test_instance_reader -v
