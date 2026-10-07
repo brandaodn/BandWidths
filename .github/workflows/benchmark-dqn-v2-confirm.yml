@@ -1,0 +1,126 @@
+name: DQN v2 confirmation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - article_code/benchmark_dqn_v2_confirm.py
+      - .github/workflows/benchmark-dqn-v2-confirm.yml
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run confirmation
+        working-directory: article_code
+        run: |
+          python benchmark_dqn_v2_confirm.py \
+            --data-dir data/artigo_datas \
+            --instance bcsstk01.mtx \
+            --seeds 30 \
+            --train-steps 300 \
+            --eval-steps 60 \
+            --output /tmp/dqn_v2_confirm.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-confirm-raw
+          path: /tmp/dqn_v2_confirm.csv
+
+  aggregate:
+    needs: confirm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dqn-v2-confirm-raw
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy statsmodels
+      - name: Aggregate and test
+        run: |
+          python - <<'PY'
+          import pandas as pd, numpy as np
+          from scipy.stats import wilcoxon
+          from statsmodels.stats.multitest import multipletests
+
+          df=pd.read_csv("artifacts/dqn_v2_confirm.csv")
+          metrics=[
+              ("train","dqn_train_best",["random_train_best","eigen_train_best","katz_train_best"]),
+              ("eval","dqn_eval_best",["random_eval_best","eigen_eval_best","katz_eval_best"]),
+              ("total","dqn_total_best",["random_total_best","eigen_total_best","katz_total_best"]),
+          ]
+
+          summary=[]
+          tests=[]
+          for phase,dqn_col,others in metrics:
+              cols=[dqn_col]+others
+              for col in cols:
+                  x=df[col].to_numpy()
+                  summary.append({
+                      "phase":phase,"method":col,
+                      "mean_bw":x.mean(),"std_bw":x.std(ddof=1),
+                      "median_bw":np.median(x),"best_bw":x.min(),
+                  })
+              dqn=df[dqn_col].to_numpy()
+              raw_ps=[]
+              local=[]
+              for col in others:
+                  other=df[col].to_numpy()
+                  if np.all(dqn==other):
+                      stat,p=0.0,1.0
+                  else:
+                      try:
+                          stat,p=wilcoxon(dqn,other,zero_method="wilcox",alternative="less")
+                      except ValueError:
+                          stat,p=np.nan,1.0
+                  local.append({
+                      "phase":phase,"comparison":f"{dqn_col} < {col}",
+                      "dqn_wins":int((dqn<other).sum()),
+                      "ties":int((dqn==other).sum()),
+                      "other_wins":int((dqn>other).sum()),
+                      "wilcoxon_stat":float(stat),"p_raw":float(p),
+                  })
+                  raw_ps.append(float(p))
+              reject,p_adj,_,_=multipletests(raw_ps,alpha=0.05,method="holm")
+              for row,pa,rj in zip(local,p_adj,reject):
+                  row["p_holm"]=float(pa); row["reject_005"]=bool(rj)
+                  tests.append(row)
+
+          # RCM is deterministic; summarize separately.
+          summary.append({
+              "phase":"deterministic","method":"RCM",
+              "mean_bw":df["rcm_bw"].iloc[0],"std_bw":0.0,
+              "median_bw":df["rcm_bw"].iloc[0],"best_bw":df["rcm_bw"].iloc[0],
+          })
+
+          action_cols=[c for c in df.columns if c.startswith("tail_") or c.startswith("eval_")]
+          actions=df[action_cols].mean().sort_values(ascending=False).reset_index()
+          actions.columns=["action_frequency","mean_fraction"]
+
+          pd.DataFrame(summary).to_csv("dqn_v2_confirm_summary.csv",index=False)
+          pd.DataFrame(tests).to_csv("dqn_v2_confirm_tests.csv",index=False)
+          actions.to_csv("dqn_v2_confirm_actions.csv",index=False)
+          print("SUMMARY")
+          print(pd.DataFrame(summary).to_string(index=False))
+          print("\nTESTS")
+          print(pd.DataFrame(tests).to_string(index=False))
+          print("\nACTIONS")
+          print(actions.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-confirm-results
+          path: |
+            dqn_v2_confirm_summary.csv
+            dqn_v2_confirm_tests.csv
+            dqn_v2_confirm_actions.csv
