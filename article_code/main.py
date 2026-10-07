@@ -94,6 +94,7 @@ for loop in range(1,2):
             centralities_list = list(centralities.keys())
             #instancia os graficos networkx
             G = nx.Graph()
+            G.add_nodes_from(range(1, nnodes + 1))
             G.add_edges_from(edges)
 
             temp_bandwidth = set_bandwidth(G)
@@ -104,14 +105,14 @@ for loop in range(1,2):
             
             # Largest connected component
             components = list(nx.connected_components(G))
-            largest_component = max(components, key=len)
+            largest_component = max(components, key=len, default=set())
             largest_size = len(largest_component)
             
             # Subgraph induced by the largest component
             largest_subgraph = G.subgraph(largest_component)
             
             # Diameter of the largest component
-            diameter = nx.diameter(largest_subgraph)
+            diameter = nx.diameter(largest_subgraph) if largest_size else 0
 
             start_time = time.time()
             
@@ -150,7 +151,7 @@ for loop in range(1,2):
                         n_states=4,
                         deep=True)
 
-            env = Env(100000)
+            env = Env(temp_bandwidth)
 
             state = env.get_initial_state()
             agent_movements = agent.get_movements()
@@ -161,7 +162,6 @@ for loop in range(1,2):
             start_time = time.time()
 
             for i in range(max_iter):
-                env.reset()
                 t = i + 2
                 #Escolha da centralidade e da lista
                 action = agent.choose_action(state)
@@ -181,7 +181,7 @@ for loop in range(1,2):
                 new_state = [n_step, gap, reward, bandwidth]
                 
                 #Treinamento do novo estado
-                agent.learn(state, action, reward, new_state)
+                agent.learn(state, action, reward, new_state, done=(i == max_iter - 1))
 
                 #score acumulado por iteração
                 score += reward
@@ -195,10 +195,10 @@ for loop in range(1,2):
                     
                     # salvar a melhor solução
                     temp_bandwidth = bandwidth
-                    grafo = grafo_solution
+                    # Keep the original graph fixed across heuristic evaluations.
 
-                    G_reordered = nx.relabel_nodes(G, solution)
-                    adj_matrix_reordered = nx.to_numpy_array(G_reordered) 
+                    ordered_nodes = sorted(G.nodes(), key=lambda node: solution[node])
+                    adj_matrix_reordered = nx.to_numpy_array(G, nodelist=ordered_nodes) 
                     plot_sparse_matrix(adj_matrix_reordered, name_matrix, file_name=os.path.join(path_name, file_name))
 
             end_time = time.time()

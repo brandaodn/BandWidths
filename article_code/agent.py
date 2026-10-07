@@ -57,69 +57,85 @@ class Agent:
 
     def __post_init__(self):
         """Initializes the agent after dataclass instantiation."""
-        self.init_Q()
+        self.n_actions = self.n_movements
         self.action_space = list(range(self.n_movements))
-        self.n_actions = len(self.action_space)
+        self.init_Q()
 
     def init_Q(self):
         """Initializes Q-values based on the learning approach."""
         if self.deep:
             self.Q = LinearQNet(self.learning_rate, self.n_states, self.n_actions)
             if self.model_path is not None:
-                self.Q.load_state_dict(torch.load(self.model_path))
+                self.Q.load_state_dict(torch.load(self.model_path, map_location=self.Q.device, weights_only=True))
                 self.Q.eval()
         else:
             for state in range(self.n_states):
                 for action in range(self.n_actions):
                     self.Q[(state, action)] = 0.0
 
-    def choose_action(self, state, deep=True):
-        """Selects an action using epsilon-greedy policy."""
-        action = None
-        if deep:
-            if np.random.random() > self.epsilon:
-                state = torch.tensor(state, dtype=torch.float).to(self.Q.device)
-                actions = self.Q.forward(state)
-                action = T.argmax(actions).item()
-            else:
-                action = np.random.choice(self.action_space)
-        else:
-            if np.random.random() < self.epsilon:
-                action = np.random.choice([i for i in range(self.n_actions)])
-            else:
-                actions = np.array([self.Q[(state, a)] for a in range(self.n_actions)])
-                action = np.argmax(actions)
+    def choose_action(self, state, deep=None):
+        """Select an action with epsilon-greedy exploration."""
+        deep = self.deep if deep is None else deep
 
-        return action
+        if np.random.random() < self.epsilon:
+            return int(np.random.choice(self.action_space))
+
+        if deep:
+            with torch.no_grad():
+                state_tensor = torch.as_tensor(
+                    state, dtype=torch.float32, device=self.Q.device
+                )
+                return int(self.Q(state_tensor).argmax().item())
+
+        state_key = tuple(state) if isinstance(state, (list, np.ndarray)) else state
+        q_values = [self.Q.get((state_key, action), 0.0) for action in self.action_space]
+        return int(np.argmax(q_values))
 
     def decrement_epsilon(self):
-        """Reduces the exploration rate over time."""
-        self.epsilon = self.epsilon * self.eps_dec if self.epsilon > self.eps_min else self.eps_min
+        """Reduce epsilon without crossing the configured minimum."""
+        self.epsilon = max(self.eps_min, self.epsilon * self.eps_dec)
 
-    def learn(self, state, action, reward, next_state):
-        """Updates agent's Q-values based on experience."""
+    def learn(self, state, action, reward, next_state, done=False):
+        """Perform one Q-learning update; terminal states do not bootstrap."""
         if self.deep:
             self.Q.optimizer.zero_grad()
-            states = torch.tensor(state, dtype=torch.float).to(self.Q.device)
-            actions = torch.tensor(action, dtype=torch.int).to(self.Q.device)
-            rewards = torch.tensor(reward, dtype=torch.float).to(self.Q.device)
-            next_states = torch.tensor(next_state, dtype=torch.float).to(self.Q.device)
 
-            q_pred = self.Q.forward(states)[actions]
-            q_next = self.Q.forward(next_states).max()
+            state_tensor = torch.as_tensor(
+                state, dtype=torch.float32, device=self.Q.device
+            )
+            next_state_tensor = torch.as_tensor(
+                next_state, dtype=torch.float32, device=self.Q.device
+            )
 
-            q_target = rewards + self.gamma * q_next
+            q_pred = self.Q(state_tensor)[int(action)]
 
-            loss = self.Q.loss(q_target, q_pred).to(self.Q.device)
+            with torch.no_grad():
+                next_q = 0.0 if done else self.Q(next_state_tensor).max().item()
+                q_target = torch.tensor(
+                    float(reward) + self.gamma * next_q,
+                    dtype=torch.float32,
+                    device=self.Q.device,
+                )
+
+            loss = self.Q.loss(q_pred, q_target)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.Q.parameters(), max_norm=1.0)
             self.Q.optimizer.step()
         else:
-            actions = np.array([self.Q[(next_state, a)] for a in range(self.n_actions)])
-            a_max = np.argmax(actions)
-
-            self.Q[(state, action)] += self.learning_rate * (reward +
-                                                              self.gamma * self.Q[(next_state, a_max)] -
-                                                              self.Q[(state, action)])
+            state_key = tuple(state) if isinstance(state, (list, np.ndarray)) else state
+            next_state_key = (
+                tuple(next_state)
+                if isinstance(next_state, (list, np.ndarray))
+                else next_state
+            )
+            next_q = 0.0 if done else max(
+                self.Q.get((next_state_key, a), 0.0) for a in self.action_space
+            )
+            key = (state_key, int(action))
+            old_q = self.Q.get(key, 0.0)
+            self.Q[key] = old_q + self.learning_rate * (
+                float(reward) + self.gamma * next_q - old_q
+            )
 
         self.decrement_epsilon()
 
