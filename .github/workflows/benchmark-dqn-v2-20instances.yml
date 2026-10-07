@@ -1,0 +1,160 @@
+name: DQN v2 - 20 instance benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/benchmark-dqn-v2-20instances.yml
+      - article_code/benchmark_dqn_v2_confirm.py
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        instance:
+          - bcsstk04.mtx
+          - bcsstk05.mtx
+          - bcsstk06.mtx
+          - bp_0.mtx
+          - bp_200.mtx
+          - bp_400.mtx
+          - bp_600.mtx
+          - bp_800.mtx
+          - bp_1000.mtx
+          - bp_1200.mtx
+          - bp_1400.mtx
+          - bp_1600.mtx
+          - lshp_265.mtx
+          - lshp_406.mtx
+          - lshp1009.mtx
+          - lshp1270.mtx
+          - lshp1561.mtx
+          - lshp1882.mtx
+          - lshp2233.mtx
+          - shl_0.mtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 30-seed benchmark
+        working-directory: article_code
+        run: |
+          python benchmark_dqn_v2_confirm.py \
+            --data-dir data/artigo_datas \
+            --instance ${{ matrix.instance }} \
+            --seeds 30 \
+            --train-steps 300 \
+            --eval-steps 60 \
+            --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-20-${{ matrix.instance }}
+          path: /tmp/result.csv
+
+  aggregate:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "dqn-v2-20-*"
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy statsmodels
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob
+          import pandas as pd, numpy as np
+          from scipy.stats import wilcoxon
+          from statsmodels.stats.multitest import multipletests
+
+          files=glob.glob("artifacts/**/result.csv", recursive=True)
+          df=pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+
+          method_cols={
+              "DQN":"dqn_total_best",
+              "Random":"random_total_best",
+              "Eigenvector":"eigen_total_best",
+              "Katz":"katz_total_best",
+          }
+
+          summary=[]
+          tests=[]
+          for inst,g in df.groupby("instance"):
+              for method,col in method_cols.items():
+                  x=g[col].to_numpy()
+                  summary.append({
+                      "instance":inst,"method":method,
+                      "mean_bw":x.mean(),"std_bw":x.std(ddof=1),
+                      "median_bw":np.median(x),"best_bw":x.min(),
+                      "original_bw":g["original_bw"].iloc[0],
+                      "rcm_bw":g["rcm_bw"].iloc[0],
+                  })
+
+              dqn=g["dqn_total_best"].to_numpy()
+              comps=[]
+              ps=[]
+              for method,col in [("Random","random_total_best"),
+                                 ("Eigenvector","eigen_total_best"),
+                                 ("Katz","katz_total_best")]:
+                  other=g[col].to_numpy()
+                  if np.all(dqn==other):
+                      stat,p=0.0,1.0
+                  else:
+                      try:
+                          stat,p=wilcoxon(dqn,other,zero_method="wilcox",alternative="less")
+                      except ValueError:
+                          stat,p=np.nan,1.0
+                  comps.append({
+                      "instance":inst,"comparison":f"DQN<{method}",
+                      "dqn_wins":int((dqn<other).sum()),
+                      "ties":int((dqn==other).sum()),
+                      "other_wins":int((dqn>other).sum()),
+                      "wilcoxon_stat":float(stat),"p_raw":float(p),
+                  })
+                  ps.append(float(p))
+              _,padj,_,_=multipletests(ps,alpha=0.05,method="holm")
+              for row,p in zip(comps,padj):
+                  row["p_holm"]=float(p)
+                  row["significant_005"]=bool(p<0.05)
+                  tests.append(row)
+
+          pd.DataFrame(summary).to_csv("dqn_v2_20_summary.csv",index=False)
+          pd.DataFrame(tests).to_csv("dqn_v2_20_tests.csv",index=False)
+          df.to_csv("dqn_v2_20_raw.csv",index=False)
+
+          wide=pd.DataFrame(summary).pivot(index="instance",columns="method",values="mean_bw")
+          ranks=wide.rank(axis=1,method="average",ascending=True)
+          overall=pd.DataFrame({
+              "method":ranks.columns,
+              "mean_rank":[ranks[c].mean() for c in ranks.columns],
+              "instance_wins":[int((wide[c].eq(wide.min(axis=1))).sum()) for c in wide.columns],
+          }).sort_values("mean_rank")
+          overall.to_csv("dqn_v2_20_overall.csv",index=False)
+
+          print("INSTANCE SUMMARY")
+          print(pd.DataFrame(summary).to_string(index=False))
+          print("\nPAIRWISE TESTS")
+          print(pd.DataFrame(tests).to_string(index=False))
+          print("\nOVERALL")
+          print(overall.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dqn-v2-20-results
+          path: |
+            dqn_v2_20_summary.csv
+            dqn_v2_20_tests.csv
+            dqn_v2_20_overall.csv
+            dqn_v2_20_raw.csv
