@@ -1,0 +1,79 @@
+name: Quick DQN centrality ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix-dqn]
+    paths:
+      - .github/workflows/benchmark-ablation-quick.yml
+
+jobs:
+  ablation:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk01.mtx,bcsstk02.mtx,bcsstk04.mtx,bcsstk05.mtx,bcsstk06.mtx,bcsstk07.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run ablation
+        working-directory: article_code
+        run: |
+          python benchmark_ablation.py             --data-dir data/artigo_datas             --seeds 10             --budget 10             --output /tmp/ablation.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quick-ablation-${{ matrix.instance }}
+          path: /tmp/ablation.csv
+
+  aggregate:
+    needs: ablation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "quick-ablation-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob, pandas as pd, numpy as np
+          from scipy.stats import wilcoxon
+          df=pd.concat([pd.read_csv(f) for f in glob.glob("artifacts/**/ablation.csv",recursive=True)],ignore_index=True)
+          summary=df.groupby(["instance","method"]).agg(
+              mean_bw=("best_bw","mean"),std_bw=("best_bw","std"),
+              median_bw=("best_bw","median"),best_bw=("best_bw","min"),
+              mean_reduction_pct=("reduction_pct","mean")
+          ).reset_index()
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              p=g.pivot(index="seed",columns="method",values="best_bw")
+              d=p["DQN"].to_numpy()
+              for m in p.columns:
+                  x=p[m].to_numpy()
+                  if np.all(d==x): stat,pv=0.0,1.0
+                  else:
+                      try: stat,pv=wilcoxon(d,x,zero_method="wilcox")
+                      except ValueError: stat,pv=np.nan,np.nan
+                  rows.append({"instance":inst,"method_vs_dqn":m,
+                               "dqn_wins":int((d<x).sum()),"ties":int((d==x).sum()),
+                               "method_wins":int((d>x).sum()),"wilcoxon_p":float(pv)})
+          tests=pd.DataFrame(rows)
+          summary.to_csv("quick_ablation_summary.csv",index=False)
+          tests.to_csv("quick_ablation_vs_dqn.csv",index=False)
+          print(summary.to_string(index=False))
+          print("\nVS DQN\n"+tests.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quick-ablation-results
+          path: |
+            quick_ablation_summary.csv
+            quick_ablation_vs_dqn.csv
