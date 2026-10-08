@@ -14,7 +14,7 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("--data-dir",required=True)
     p.add_argument("--instance",default="bcsstk01.mtx")
-    p.add_argument("--seeds",type=int,default=30)
+    p.add_argument("--seeds",type=int,default=30)\n    p.add_argument("--seed-start",type=int,default=1)
     p.add_argument("--train-steps",type=int,default=300)
     p.add_argument("--eval-steps",type=int,default=60)
     p.add_argument("--output",required=True)
@@ -26,7 +26,7 @@ def main():
     total_steps=a.train_steps+a.eval_steps
     rows=[]
 
-    for seed in range(1,a.seeds+1):
+    for seed in range(a.seed_start,a.seed_start+a.seeds):
         random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
         solver=DQNSearchV2(
             graph=g,centrality_maps=maps,centralities=CENTRALITIES,
