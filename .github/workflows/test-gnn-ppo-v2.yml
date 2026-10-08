@@ -1,0 +1,26 @@
+name: Test GNN PPO v2
+
+on:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - article_code/gnn_ppo_v2.py
+      - article_code/tests/test_gnn_ppo_v2.py
+      - article_code/modules/utils/read_Instances.py
+      - .github/workflows/test-gnn-ppo-v2.yml
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          pip install numpy networkx scipy
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run v2 tests
+        working-directory: article_code
+        run: python -m unittest tests.test_gnn_ppo_v2 -v

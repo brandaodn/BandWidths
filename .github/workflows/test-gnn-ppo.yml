@@ -1,0 +1,28 @@
+name: Test GNN PPO prototype
+
+on:
+  push:
+    branches: [gnn-ppo]
+  pull_request:
+    branches: [fix-dqn]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Compile
+        run: python -m py_compile article_code/gnn_ppo.py
+      - name: Unit tests
+        working-directory: article_code
+        run: python -m unittest tests.test_gnn_ppo -v
+      - name: Real-matrix smoke
+        working-directory: article_code
+        run: |
+          python gnn_ppo.py data/artigo_datas/bcsstk01.mtx             --episodes 2 --steps 5 --seed 7 --output /tmp/gnnppo.json

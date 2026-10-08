@@ -1,0 +1,77 @@
+name: Confirm GNN PPO gains
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - .github/workflows/benchmark-gnn-ppo-confirm.yml
+
+jobs:
+  confirm:
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [bcsstk06.mtx,bcsstk07.mtx]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run confirmation
+        working-directory: article_code
+        run: |
+          python benchmark_gnn_ppo.py             --data-dir data/artigo_datas             --seeds 30             --episodes 20             --steps 30             --output /tmp/results.csv             ${{ matrix.instance }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: confirm-${{ matrix.instance }}
+          path: /tmp/results.csv
+
+  aggregate:
+    needs: confirm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: "confirm-*", path: artifacts}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate
+        run: |
+          python - <<'PY'
+          import glob
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+          df=pd.concat([pd.read_csv(f) for f in glob.glob("artifacts/**/results.csv",recursive=True)],ignore_index=True)
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              r=g.rcm_bw.to_numpy(); p=g.ppo_best_bw.to_numpy(); d=r-p
+              if np.all(d==0): stat,pv=0.0,1.0
+              else: stat,pv=wilcoxon(r,p,zero_method="wilcox",alternative="greater")
+              rows.append({
+                  "instance":inst,"rcm_bw":int(r[0]),
+                  "ppo_mean_bw":float(p.mean()),"ppo_std_bw":float(p.std(ddof=1)),
+                  "ppo_best_bw":int(p.min()),"ppo_worst_bw":int(p.max()),
+                  "improved_runs":int((p<r).sum()),"ties":int((p==r).sum()),
+                  "mean_improvement":float(d.mean()),
+                  "mean_improvement_pct":float((100*d/r).mean()),
+                  "wilcoxon_p_one_sided":float(pv),
+                  "mean_time_s":float(g.elapsed_s.mean()),
+              })
+          out=pd.DataFrame(rows)
+          out.to_csv("confirm_summary.csv",index=False)
+          df.to_csv("confirm_raw.csv",index=False)
+          print(out.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: confirm-gnnppo-results
+          path: |
+            confirm_summary.csv
+            confirm_raw.csv

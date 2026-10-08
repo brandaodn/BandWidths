@@ -1,0 +1,67 @@
+name: Confirm expanded PPO action space
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [gnn-ppo]
+    paths:
+      - .github/workflows/benchmark-action-space-confirm.yml
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Compare on bcsstk06
+        working-directory: article_code
+        run: |
+          python benchmark_action_space.py             --data-dir data/artigo_datas             --seeds 30             --episodes 20             --steps 30             --output /tmp/action_space.csv             bcsstk06.mtx
+      - name: Aggregate
+        run: |
+          pip install scipy pandas numpy
+          python - <<'PY'
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+          df=pd.read_csv("/tmp/action_space.csv")
+          p=df.pivot(index="seed",columns="mode",values="best_bw")
+          adj=p["adjacent"].to_numpy()
+          mix=p["mixed"].to_numpy()
+          rcm=int(df.rcm_bw.iloc[0])
+          if np.all(adj==mix):
+              stat,pv=0.0,1.0
+          else:
+              stat,pv=wilcoxon(adj,mix,zero_method="wilcox",alternative="greater")
+          summary=pd.DataFrame([{
+              "instance":"bcsstk06.mtx",
+              "rcm_bw":rcm,
+              "adjacent_mean_bw":float(adj.mean()),
+              "adjacent_std_bw":float(adj.std(ddof=1)),
+              "adjacent_best_bw":int(adj.min()),
+              "adjacent_improved_runs":int((adj<rcm).sum()),
+              "mixed_mean_bw":float(mix.mean()),
+              "mixed_std_bw":float(mix.std(ddof=1)),
+              "mixed_best_bw":int(mix.min()),
+              "mixed_improved_runs":int((mix<rcm).sum()),
+              "mixed_wins":int((mix<adj).sum()),
+              "ties":int((mix==adj).sum()),
+              "adjacent_wins":int((mix>adj).sum()),
+              "wilcoxon_p_mixed_better":float(pv),
+          }])
+          summary.to_csv("action_space_confirm_summary.csv",index=False)
+          df.to_csv("action_space_confirm_raw.csv",index=False)
+          print(summary.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: action-space-confirm-results
+          path: |
+            action_space_confirm_summary.csv
+            action_space_confirm_raw.csv
