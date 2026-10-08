@@ -1,0 +1,51 @@
+name: Reviewer fixed-7 + VBS benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/reviewer-fixed7-vbs.yml
+      - article_code/benchmark_fixed7_vbs.py
+      - article_code/centralities.py
+      - article_code/modules/components/constructive.py
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        instance:
+          - bcsstk01.mtx
+          - bcsstk04.mtx
+          - bcsstk05.mtx
+          - bcsstk06.mtx
+          - bp_0.mtx
+          - bp_200.mtx
+          - lshp265.mtx
+          - lshp406.mtx
+          - lshp1009.mtx
+          - lshp1270.mtx
+          - lshp1561.mtx
+          - lshp1882.mtx
+          - shl_0.mtx
+        seed_start: [1, 6, 11, 16, 21, 26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 5-seed fixed-baseline chunk
+        working-directory: article_code
+        run: |
+          python benchmark_fixed7_vbs.py             --data-dir data/artigo_datas             --instance ${{ matrix.instance }}             --seeds 5             --seed-start ${{ matrix.seed_start }}             --decisions 360             --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixed7-${{ matrix.instance }}-${{ matrix.seed_start }}
+          path: /tmp/result.csv
