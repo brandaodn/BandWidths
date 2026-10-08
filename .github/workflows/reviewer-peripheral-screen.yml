@@ -18,8 +18,8 @@ jobs:
       max-parallel: 5
       matrix:
         instance:
-          - lshp265.mtx
-          - lshp406.mtx
+          - lshp_265.mtx
+          - lshp_406.mtx
           - lshp1009.mtx
           - lshp1270.mtx
           - lshp1561.mtx
