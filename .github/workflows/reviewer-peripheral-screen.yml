@@ -1,0 +1,44 @@
+name: Reviewer peripheral-start screening
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/reviewer-peripheral-screen.yml
+      - article_code/reviewer_experiments.py
+      - article_code/dqn_v2.py
+      - article_code/centralities.py
+      - article_code/modules/components/constructive.py
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        instance:
+          - lshp265.mtx
+          - lshp406.mtx
+          - lshp1009.mtx
+          - lshp1270.mtx
+          - lshp1561.mtx
+          - lshp1882.mtx
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 5-seed structural screening
+        working-directory: article_code
+        run: |
+          python reviewer_experiments.py             --data-dir data/artigo_datas             --instance ${{ matrix.instance }}             --seeds 5             --train-steps 300             --eval-steps 60             --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peripheral-screen-${{ matrix.instance }}
+          path: /tmp/result.csv
