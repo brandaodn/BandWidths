@@ -1,0 +1,109 @@
+name: Reviewer 2x2 selector-start ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/reviewer-grid.yml
+
+jobs:
+  grid:
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        instance:
+          - bcsstk01.mtx
+          - bp_0.mtx
+          - bp_200.mtx
+          - shl_0.mtx
+          - lshp_265.mtx
+          - lshp_406.mtx
+          - lshp1009.mtx
+          - lshp1270.mtx
+          - lshp1561.mtx
+          - lshp1882.mtx
+        seed_start: [1, 6, 11, 16, 21, 26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 5-seed 2x2 chunk
+        working-directory: article_code
+        run: |
+          python reviewer_grid.py \
+            --data-dir data/artigo_datas \
+            --instance ${{ matrix.instance }} \
+            --seeds 5 --seed-start ${{ matrix.seed_start }} \
+            --train-steps 300 --eval-steps 60 \
+            --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grid-${{ matrix.instance }}-${{ matrix.seed_start }}
+          path: /tmp/result.csv
+
+  aggregate:
+    needs: grid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "grid-*"
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate paired statistics
+        run: |
+          python - <<'PY'
+          import glob, numpy as np, pandas as pd
+          from scipy.stats import wilcoxon
+          df=pd.concat([pd.read_csv(f) for f in glob.glob("artifacts/**/result.csv",recursive=True)],ignore_index=True)
+          rows=[]
+          def wtlp(a,b):
+              # perspective of a: lower is win
+              return int((a<b).sum()),int((a==b).sum()),int((a>b).sum())
+          def wx(a,b):
+              if np.all(a==b): return 0.0,1.0
+              r=wilcoxon(a,b,alternative="two-sided",zero_method="wilcox",method="approx",correction=False)
+              return float(r.statistic),float(r.pvalue)
+          for inst,g in df.groupby("instance"):
+              g=g.sort_values("seed")
+              if g.seed.nunique()!=30: raise SystemExit(f"{inst}: {g.seed.nunique()} seeds")
+              ds=g.dqn_standard.to_numpy(); dp=g.dqn_peripheral.to_numpy()
+              rs=g.random_standard.to_numpy(); rp=g.random_peripheral.to_numpy()
+              tests=[wx(dp,ds),wx(rp,rs),wx(dp,rp)]
+              ps=[x[1] for x in tests]
+              order=np.argsort(ps); adj=[0]*3; running=0
+              for k,idx in enumerate(order):
+                  running=max(running,min(1.0,(3-k)*ps[idx])); adj[idx]=running
+              rows.append(dict(
+                instance=inst,
+                dqn_standard_mean=ds.mean(),dqn_standard_std=ds.std(ddof=1),
+                dqn_peripheral_mean=dp.mean(),dqn_peripheral_std=dp.std(ddof=1),
+                random_standard_mean=rs.mean(),random_standard_std=rs.std(ddof=1),
+                random_peripheral_mean=rp.mean(),random_peripheral_std=rp.std(ddof=1),
+                dqn_pp_wtl=str(wtlp(dp,ds)),random_pp_wtl=str(wtlp(rp,rs)),
+                dqnpp_vs_randompp_wtl=str(wtlp(dp,rp)),
+                p_dqn_pp=ps[0],p_dqn_pp_holm=adj[0],
+                p_random_pp=ps[1],p_random_pp_holm=adj[1],
+                p_dqnpp_randompp=ps[2],p_dqnpp_randompp_holm=adj[2],
+                raw_rcm_bw=g.raw_rcm_bw.iloc[0]))
+          out=pd.DataFrame(rows)
+          out.to_csv("reviewer_grid_summary.csv",index=False)
+          df.to_csv("reviewer_grid_raw.csv",index=False)
+          print(out.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewer-grid-results
+          path: |
+            reviewer_grid_summary.csv
+            reviewer_grid_raw.csv
