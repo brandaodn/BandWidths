@@ -212,7 +212,7 @@ def init_Solution_Centrality_otm(graph: GrafoListaAdj, nodes_centrality:dict)->d
         
     return f
 
-def init_Solution_Centrality_lcr(graph: GrafoListaAdj,  nodes_centrality:dict, random_centrality:str, alpha:float, centralities:dict)->dict:
+def init_Solution_Centrality_lcr(graph: GrafoListaAdj, nodes_centrality:dict, random_centrality:str, alpha:float, centralities:dict, start_node=None)->dict:
     
     # calculando a centralidade de cada vertice
 
@@ -228,23 +228,27 @@ def init_Solution_Centrality_lcr(graph: GrafoListaAdj,  nodes_centrality:dict, r
     for i in range(len(list(graph.V()))+1): #popula a lista mark de False
         mark.append(False)
     
-    # Escolher vértice inicial baseado em centralidade
-
-    # Calcular as probabilidades de cada vértice
-    #! old
-    sum_values = sum(nodes_centrality.values())
-    if sum_values == 0: 
-        # fallback: escolher uniformemente 
-        probs = [1/len(nodes_centrality) for _ in nodes_centrality.values()] 
-    else: 
-        probs = [valor/sum_values for valor in nodes_centrality.values()] 
-
-    # # Sortear um item baseado nas probabilidades
-    k = random.choices(list(nodes_centrality.keys()), probs)[0] 
-
-    #! new
-    # # Opção: vértice com maior centralidade
-    # k = max(nodes_centrality.keys(), key=lambda v: nodes_centrality[v])
+    # Choose the starting vertex. By default, retain the original
+    # centrality-weighted sampling. Experiments may provide a fixed
+    # pseudo-peripheral start node to separate BFS-start effects from
+    # within-level centrality ordering.
+    if start_node is not None:
+        k = start_node
+    else:
+        vertices = list(nodes_centrality.keys())
+        values = np.asarray([nodes_centrality[v] for v in vertices], dtype=float)
+        valid = (
+            len(vertices) > 0
+            and np.all(np.isfinite(values))
+            and np.all(values >= 0.0)
+            and float(values.sum()) > 0.0
+        )
+        if valid:
+            probs = (values / values.sum()).tolist()
+            k = random.choices(vertices, probs)[0]
+        else:
+            # Uniform fallback for zero, negative, NaN or infinite weights.
+            k = random.choice(vertices)
 
     mark[k] = True #visita o vertice assinado nno v_zero
     
