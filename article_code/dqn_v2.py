@@ -55,7 +55,7 @@ def dense_reward(candidate_bw, previous_best, initial_bw):
 
 class DQNSearchV2:
     def __init__(self, graph, centrality_maps, centralities, initial_bw,
-                 train_steps=500, eval_steps=100, samples_per_action=15):
+                 train_steps=500, eval_steps=100, samples_per_action=15, start_node=None):
         self.graph = graph
         self.centrality_maps = centrality_maps
         self.centralities = centralities
@@ -64,6 +64,7 @@ class DQNSearchV2:
         self.train_steps = int(train_steps)
         self.eval_steps = int(eval_steps)
         self.samples_per_action = int(samples_per_action)
+        self.start_node = start_node
 
         state_dim = 5 + len(self.names)
         cfg = DQNConfig(
@@ -89,6 +90,7 @@ class DQNSearchV2:
             alpha=0.3,
             iter_max=self.samples_per_action,
             centralities=self.centralities,
+            start_node=self.start_node,
         )
         return float(cost)
 
