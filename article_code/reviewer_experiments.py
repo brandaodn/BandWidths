@@ -93,6 +93,7 @@ def main():
     p.add_argument("--data-dir", required=True)
     p.add_argument("--instance", required=True)
     p.add_argument("--seeds", type=int, default=5)
+    p.add_argument("--seed-start", type=int, default=1)
     p.add_argument("--train-steps", type=int, default=300)
     p.add_argument("--eval-steps", type=int, default=60)
     p.add_argument("--output", required=True)
@@ -106,7 +107,7 @@ def main():
     total_decisions = a.train_steps + a.eval_steps
     rows = []
 
-    for seed in range(1, a.seeds + 1):
+    for seed in range(a.seed_start, a.seed_start + a.seeds):
         std, std_t, std_freq = run_dqn(
             g, maps, original, a.train_steps, a.eval_steps, seed, None
         )
