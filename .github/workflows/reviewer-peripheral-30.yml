@@ -1,0 +1,107 @@
+name: Reviewer peripheral-start 30-seed ablation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dqn-v2]
+    paths:
+      - .github/workflows/reviewer-peripheral-30.yml
+
+jobs:
+  ablation:
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        instance:
+          - lshp_265.mtx
+          - lshp_406.mtx
+          - lshp1009.mtx
+          - lshp1270.mtx
+          - lshp1561.mtx
+          - lshp1882.mtx
+        seed_start: [1, 6, 11, 16, 21, 26]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install
+        run: |
+          pip install numpy networkx scipy pandas
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - name: Run 5-seed paired chunk
+        working-directory: article_code
+        run: |
+          python reviewer_experiments.py \
+            --data-dir data/artigo_datas \
+            --instance ${{ matrix.instance }} \
+            --seeds 5 \
+            --seed-start ${{ matrix.seed_start }} \
+            --train-steps 300 \
+            --eval-steps 60 \
+            --output /tmp/result.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peripheral30-${{ matrix.instance }}-${{ matrix.seed_start }}
+          path: /tmp/result.csv
+
+  aggregate:
+    needs: ablation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "peripheral30-*"
+          path: artifacts
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas numpy scipy
+      - name: Aggregate and paired tests
+        run: |
+          python - <<'PY'
+          import glob
+          import numpy as np
+          import pandas as pd
+          from scipy.stats import wilcoxon
+
+          files=glob.glob("artifacts/**/result.csv",recursive=True)
+          df=pd.concat([pd.read_csv(f) for f in files],ignore_index=True)
+          rows=[]
+          for inst,g in df.groupby("instance"):
+              if g["seed"].nunique()!=30:
+                  raise SystemExit(f"{inst}: expected 30 seeds, got {g['seed'].nunique()}")
+              x=g["dqn_standard"].to_numpy()
+              y=g["dqn_peripheral"].to_numpy()
+              if np.all(x==y):
+                  stat,p=0.0,1.0
+              else:
+                  stat,p=wilcoxon(y,x,alternative="less",zero_method="wilcox")
+              rows.append({
+                  "instance":inst,
+                  "n":len(g),
+                  "original_bw":g["original_bw"].iloc[0],
+                  "raw_rcm_bw":g["raw_rcm_bw"].iloc[0],
+                  "dqn_standard_mean":x.mean(),
+                  "dqn_standard_std":x.std(ddof=1),
+                  "dqn_peripheral_mean":y.mean(),
+                  "dqn_peripheral_std":y.std(ddof=1),
+                  "mean_reduction_pct":100*(x.mean()-y.mean())/x.mean(),
+                  "peripheral_wins":int((y<x).sum()),
+                  "ties":int((y==x).sum()),
+                  "standard_wins":int((y>x).sum()),
+                  "wilcoxon_stat":float(stat),
+                  "p_one_sided":float(p),
+              })
+          out=pd.DataFrame(rows)
+          out.to_csv("peripheral30_summary.csv",index=False)
+          df.to_csv("peripheral30_raw.csv",index=False)
+          print(out.to_string(index=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: peripheral30-results
+          path: |
+            peripheral30_summary.csv
+            peripheral30_raw.csv
