@@ -96,6 +96,7 @@ def main():
     p.add_argument("--train-steps", type=int, default=300)
     p.add_argument("--eval-steps", type=int, default=60)
     p.add_argument("--output", required=True)
+    p.add_argument("--include-fixed", action="store_true")
     a = p.parse_args()
 
     path = os.path.join(a.data_dir, a.instance)
@@ -128,30 +129,32 @@ def main():
         }
 
         for name in CENTRALITIES:
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            row["fixed_" + name.lower().replace(" ", "_")] = eval_fixed(
-                g, maps, name, total_decisions, original, None
-            )
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            row["peripheral_" + name.lower().replace(" ", "_")] = eval_fixed(
-                g, maps, name, total_decisions, original, peripheral
-            )
             key = name.lower().replace(" ", "_")
             row["evalfreq_standard_" + key] = std_freq[name]
             row["evalfreq_peripheral_" + key] = per_freq[name]
 
-        fixed_cols = [row["fixed_" + n.lower().replace(" ", "_")] for n in CENTRALITIES]
-        per_cols = [row["peripheral_" + n.lower().replace(" ", "_")] for n in CENTRALITIES]
-        row["vbs_fixed"] = min(fixed_cols)
-        row["vbs_peripheral"] = min(per_cols)
+        if a.include_fixed:
+            for name in CENTRALITIES:
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                row["fixed_" + name.lower().replace(" ", "_")] = eval_fixed(
+                    g, maps, name, total_decisions, original, None
+                )
+                random.seed(seed)
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                row["peripheral_" + name.lower().replace(" ", "_")] = eval_fixed(
+                    g, maps, name, total_decisions, original, peripheral
+                )
+            fixed_cols = [row["fixed_" + n.lower().replace(" ", "_")] for n in CENTRALITIES]
+            per_cols = [row["peripheral_" + n.lower().replace(" ", "_")] for n in CENTRALITIES]
+            row["vbs_fixed"] = min(fixed_cols)
+            row["vbs_peripheral"] = min(per_cols)
+
         rows.append(row)
         print(a.instance, seed, "B0", original, "RCM", rcm,
-              "DQN", std, "DQN-per", per,
-              "VBS", row["vbs_fixed"], "VBS-per", row["vbs_peripheral"])
+              "DQN", std, "DQN-per", per)
 
     with open(a.output, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
