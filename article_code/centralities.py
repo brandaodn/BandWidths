@@ -33,7 +33,7 @@ def get_centrality_node(graph: nx.Graph,
 
     return nodes_centrality
 
-def centrality_heuristic(graph:GrafoListaAdj, centrality_values:dict, cent_str:str,  alpha:float,  iter_max:int, centralities:dict )->int:
+def centrality_heuristic(graph:GrafoListaAdj, centrality_values:dict, cent_str:str, alpha:float, iter_max:int, centralities:dict, start_node=None)->int:
 
     bandwidth = float("inf")
     solution = None
@@ -42,7 +42,7 @@ def centrality_heuristic(graph:GrafoListaAdj, centrality_values:dict, cent_str:s
     it = []
     for _ in range(iter_max):
         start_time = time.time()
-        solution = constructive.init_Solution_Centrality_lcr(graph=graph, nodes_centrality=centrality_values, random_centrality=cent_str, alpha=alpha, centralities=centralities)
+        solution = constructive.init_Solution_Centrality_lcr(graph=graph, nodes_centrality=centrality_values, random_centrality=cent_str, alpha=alpha, centralities=centralities, start_node=start_node)
         
         band_solution = Bf_graph(graph=graph, F_labels=solution) 
 
