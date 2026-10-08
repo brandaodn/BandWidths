@@ -1,4 +1,5 @@
 name: Reviewer peripheral-start 30-seed ablation
+# uses reviewer_experiments.py with --seed-start support
 
 on:
   workflow_dispatch:
