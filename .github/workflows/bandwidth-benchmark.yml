@@ -1,6 +1,10 @@
 name: BandWidths - RCM refinement benchmark
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/bandwidth-benchmark.yml'
+      - 'benchmarks/**'
   workflow_dispatch:
     inputs:
       mode:
@@ -58,9 +62,9 @@ jobs:
       - run: pip install -r benchmarks/requirements-actions.txt
       - name: Validate Matrix Market files and select evaluation set
         env:
-          MODE: ${{ inputs.mode }}
-          MAX_N: ${{ inputs.max_n }}
-          MAX_EDGES: ${{ inputs.max_edges }}
+          MODE: ${{ inputs.mode || 'pilot' }}
+          MAX_N: ${{ inputs.max_n || 800 }}
+          MAX_EDGES: ${{ inputs.max_edges || 12000 }}
         run: |
           python benchmarks/rcm_actions.py inventory \
             --repo . --output artifacts/inventory \
@@ -79,8 +83,8 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        seed_index: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4]') }}
-        steps: ${{ fromJSON(inputs.mode == 'pilot' && '[100]' || '[100,250,500]') }}
+        seed_index: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON(inputs.mode != 'full' && '[100]' || '[100,250,500]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -91,7 +95,7 @@ jobs:
       - run: pip install -r benchmarks/requirements-actions.txt
       - name: Train 10D, 29D and ablation models (synthetic only)
         env:
-          TRAIN_GRAPHS: ${{ inputs.train_graphs }}
+          TRAIN_GRAPHS: ${{ inputs.train_graphs || 55 }}
         run: |
           python benchmarks/rcm_actions.py train \
             --seed-index "${{ matrix.seed_index }}" \
@@ -118,9 +122,9 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        seed_index: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4]') }}
-        steps: ${{ fromJSON(inputs.mode == 'pilot' && '[100]' || '[100,250,500]') }}
-        shard: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4,5]') }}
+        seed_index: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON(inputs.mode != 'full' && '[100]' || '[100,250,500]') }}
+        shard: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4,5]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -139,8 +143,8 @@ jobs:
           path: artifacts/models
       - name: Evaluate all policies with identical proposal budgets
         env:
-          REPS: ${{ inputs.reps }}
-          MODE: ${{ inputs.mode }}
+          REPS: ${{ inputs.reps || 2 }}
+          MODE: ${{ inputs.mode || 'pilot' }}
         run: |
           if [ "$MODE" = pilot ]; then SHARDS=1; else SHARDS=6; fi
           python benchmarks/rcm_actions.py evaluate \
