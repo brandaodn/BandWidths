@@ -1,0 +1,197 @@
+name: BandWidths - RCM refinement benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run 5-matrix smoke pilot or entire eligible collection'
+        type: choice
+        required: true
+        default: pilot
+        options: [pilot, full]
+      max_n:
+        description: 'Max number of vertices; default filters to ~51 distinct matrices'
+        type: number
+        default: 800
+        required: true
+      max_edges:
+        description: 'Max graph edges'
+        type: number
+        default: 12000
+        required: true
+      train_graphs:
+        description: 'Synthetic training graphs per DQN variant and seed'
+        type: number
+        default: 55
+        required: true
+      reps:
+        description: 'Evaluation repetitions for each seed/matrix/budget'
+        type: number
+        default: 2
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bandwidth-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  inventory:
+    name: Validate matrices and build manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: benchmarks/requirements-actions.txt
+      - run: pip install -r benchmarks/requirements-actions.txt
+      - name: Validate Matrix Market files and select evaluation set
+        env:
+          MODE: ${{ inputs.mode }}
+          MAX_N: ${{ inputs.max_n }}
+          MAX_EDGES: ${{ inputs.max_edges }}
+        run: |
+          python benchmarks/rcm_actions.py inventory \
+            --repo . --output artifacts/inventory \
+            --mode "$MODE" --pilot-count 5 --max-n "$MAX_N" --max-edges "$MAX_EDGES"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-matrix-inventory
+          path: artifacts/inventory/
+          retention-days: 30
+
+  train:
+    name: Train DQNs / seed ${{ matrix.seed_index }} / budget ${{ matrix.steps }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        seed_index: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON(inputs.mode == 'pilot' && '[100]' || '[100,250,500]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: benchmarks/requirements-actions.txt
+      - run: pip install -r benchmarks/requirements-actions.txt
+      - name: Train 10D, 29D and ablation models (synthetic only)
+        env:
+          TRAIN_GRAPHS: ${{ inputs.train_graphs }}
+        run: |
+          python benchmarks/rcm_actions.py train \
+            --seed-index "${{ matrix.seed_index }}" \
+            --steps "${{ matrix.steps }}" \
+            --train-graphs "$TRAIN_GRAPHS" \
+            --output artifacts/models
+      - uses: actions/upload-artifact@v4
+        with:
+          name: models-s${{ matrix.seed_index }}-b${{ matrix.steps }}
+          path: artifacts/models/*.pth
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: training-s${{ matrix.seed_index }}-b${{ matrix.steps }}
+          path: artifacts/models/training.csv
+          retention-days: 30
+
+  evaluate:
+    name: Evaluate / seed ${{ matrix.seed_index }} / budget ${{ matrix.steps }} / shard ${{ matrix.shard }}
+    needs: [inventory, train]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        seed_index: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON(inputs.mode == 'pilot' && '[100]' || '[100,250,500]') }}
+        shard: ${{ fromJSON(inputs.mode == 'pilot' && '[0]' || '[0,1,2,3,4,5]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: benchmarks/requirements-actions.txt
+      - run: pip install -r benchmarks/requirements-actions.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-matrix-inventory
+          path: artifacts/inventory
+      - uses: actions/download-artifact@v4
+        with:
+          name: models-s${{ matrix.seed_index }}-b${{ matrix.steps }}
+          path: artifacts/models
+      - name: Evaluate all policies with identical proposal budgets
+        env:
+          REPS: ${{ inputs.reps }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ "$MODE" = pilot ]; then SHARDS=1; else SHARDS=6; fi
+          python benchmarks/rcm_actions.py evaluate \
+            --repo . --manifest artifacts/inventory/manifest.json \
+            --models artifacts/models \
+            --seed-index "${{ matrix.seed_index }}" --steps "${{ matrix.steps }}" \
+            --reps "$REPS" --shard "${{ matrix.shard }}" --shards "$SHARDS" \
+            --output artifacts/evaluation
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-s${{ matrix.seed_index }}-b${{ matrix.steps }}-part${{ matrix.shard }}
+          path: artifacts/evaluation/
+          retention-days: 30
+
+  aggregate:
+    name: Consolidate CSV results and family-level comparisons
+    needs: [inventory, evaluate]
+    if: ${{ always() && needs.inventory.result == 'success' && needs.evaluate.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: benchmarks/requirements-actions.txt
+      - run: pip install -r benchmarks/requirements-actions.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: artifacts/collected
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: training-*
+          path: artifacts/training
+          merge-multiple: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-matrix-inventory
+          path: artifacts/inventory
+      - name: Aggregate policy, matrix and family results
+        run: |
+          python benchmarks/rcm_actions.py aggregate \
+            --input artifacts/collected --output artifacts/summary
+          cp artifacts/inventory/* artifacts/summary/
+          find artifacts/training -name training.csv -print0 | \
+            xargs -0 -r -I '{}' sh -c 'echo "{}"' > artifacts/summary/training_files.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-bandwidth-benchmark-results
+          path: artifacts/summary/
+          retention-days: 90
