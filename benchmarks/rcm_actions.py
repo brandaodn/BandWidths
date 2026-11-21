@@ -87,11 +87,13 @@ def eval_batch(args):
         ag.net.load_state_dict(torch.load(Path(args.models)/f'{mode}.pth',map_location='cpu',weights_only=True))
         ag.net.eval()
         agents[seed][mode]=ag
-    rows, actions=evaluate(agents,graphs,1,args.reps,args.steps)
+    trace=[]
+    rows, actions=evaluate(agents,graphs,1,args.reps,args.steps,trace_rows=trace)
     out=Path(args.output);out.mkdir(parents=True,exist_ok=True)
     suffix=f's{args.seed_index}_b{args.steps}_part{args.shard}'
     rows.to_csv(out/f'results_{suffix}.csv',index=False)
     actions.to_csv(out/f'actions_{suffix}.csv',index=False)
+    pd.DataFrame(trace).to_csv(out/f'trace_{suffix}.csv',index=False)
     print('COMPLETE',suffix, 'graphs',len(graphs),'rows',len(rows),flush=True)
 
 
@@ -135,6 +137,54 @@ def aggregate(args):
                              mean_delta=float(dif.mean()),wins=int((dif<0).sum()),
                              losses=int((dif>0).sum()),ties=int((dif==0).sum())))
     pd.DataFrame(fcmp).to_csv(out/'family_comparisons.csv',index=False)
+    # Convergence: retain per-graph paired trajectories instead of global-only curves.
+    traces=list(src.rglob('trace_*.csv'))
+    if traces:
+        tr=pd.concat((pd.read_csv(f) for f in traces),ignore_index=True)
+        tr.to_csv(out/'convergence_checkpoints.csv',index=False)
+        tr['relative_gain']=(tr['rcm']-tr['bw'])/tr['rcm'].clip(lower=1)
+        tr['progress']=tr['step']/tr['steps_budget'].clip(lower=1)
+        curves=tr.groupby(['steps_budget','method','progress'],as_index=False).agg(
+            mean_gain=('relative_gain','mean'),mean_bw=('bw','mean'),
+            observations=('graph','size'))
+        curves.to_csv(out/'convergence_curves.csv',index=False)
+        # Each trial's wall-clock cutoff is its own random-dynamic refinement duration.
+        # The last observed checkpoint before that deadline is used (conservative).
+        keys=['graph','seed','rep','steps_budget']
+        random_cutoff=(tr[tr['method']=='Random'].sort_values('step')
+                       .groupby(keys,as_index=False).tail(1)[keys+['elapsed_refinement_sec']]
+                       .rename(columns={'elapsed_refinement_sec':'random_budget_sec'}))
+        matched=tr.merge(random_cutoff,on=keys,how='inner')
+        matched=matched[matched['elapsed_refinement_sec']<=matched['random_budget_sec']+1e-12]
+        matched=(matched.sort_values(['step'])
+                 .groupby(keys+['method'],as_index=False).tail(1))
+        matched['relative_gain']=(matched['rcm']-matched['bw'])/matched['rcm'].clip(lower=1)
+        matched.to_csv(out/'time_matched_trials.csv',index=False)
+        matched.groupby(['steps_budget','method'],as_index=False).agg(
+            mean_bw=('bw','mean'),mean_relative_gain=('relative_gain','mean'),
+            mean_moves=('step','mean'),graphs=('graph','nunique'),
+            trials=('bw','size')).to_csv(out/'time_matched_summary.csv',index=False)
+        # PNG curves by proposal budget.
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig,axes=plt.subplots(1,3,figsize=(15,4),sharey=True)
+            for ax,(budget,ds) in zip(axes,curves.groupby('steps_budget')):
+                for method in ['Random','Fixed_adjacent','Discounted_UCB','DQN_original','DQN_rich','DQN_rich_adaptive']:
+                    sub=ds[ds.method==method].sort_values('progress')
+                    if not sub.empty:ax.plot(sub.progress,100*sub.mean_gain,label=method)
+                ax.set_title(f'{budget} propostas')
+                ax.set_xlabel('Fração do orçamento de movimentos')
+                ax.grid(alpha=.2)
+            axes[0].set_ylabel('Melhoria média sobre RCM (%)')
+            axes[-1].legend(loc='upper left',bbox_to_anchor=(1,1),fontsize=8)
+            fig.tight_layout()
+            fig.savefig(out/'convergence.png',dpi=150,bbox_inches='tight')
+            plt.close(fig)
+        except ImportError:
+            print('matplotlib unavailable: convergence CSV was saved',flush=True)
+
     print(grp.to_string(index=False),flush=True)
 
 
