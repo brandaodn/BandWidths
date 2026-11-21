@@ -107,7 +107,7 @@ def verify_env(g):
         assert np.isfinite(s).all() and r>=0
     return start[0]
 
-def evaluate(agents,graphs,seeds,reps,steps):
+def evaluate(agents,graphs,seeds,reps,steps,trace_rows=None):
     out=[];actions=[]
     for gidx,(name,family,g) in enumerate(graphs):
         assert verify_env(g)>=0
@@ -120,6 +120,9 @@ def evaluate(agents,graphs,seeds,reps,steps):
                 for method in METHODS:
                     env=RichEnv(g,steps,trialseed);s=env.reset();rng=random.Random(trialseed+55)
                     bandit=DiscountedUCB();num=[0]*4; t0=time.perf_counter()
+                    checkpoints=set([0,1,steps]+[max(1,round(steps*j/20)) for j in range(1,21)])
+                    if trace_rows is not None:
+                        trace_rows.append(dict(graph=name,family=family,seed=seed,rep=rep,method=method,steps_budget=steps,step=0,bw=env.value[0],elapsed_refinement_sec=0.0,rcm=env.initial[0]))
                     for t in range(0 if method=='RCM' else steps):
                         if method=='Random':a=rng.randrange(4)
                         elif method=='Fixed_adjacent':a=3
@@ -133,6 +136,8 @@ def evaluate(agents,graphs,seeds,reps,steps):
                         s,reward,done,info=env.step(a)
                         if method=='Discounted_UCB':bandit.update(a,reward)
                         num[a]+=1
+                        if trace_rows is not None and (t+1) in checkpoints:
+                            trace_rows.append(dict(graph=name,family=family,seed=seed,rep=rep,method=method,steps_budget=steps,step=t+1,bw=env.value[0],elapsed_refinement_sec=time.perf_counter()-t0,rcm=env.initial[0]))
                     secs=time.perf_counter()-t0
                     out.append(dict(graph=name,family=family,seed=seed,rep=rep,method=method,n=len(g),m=g.number_of_edges(),rcm=env.initial[0],bw=env.value[0],accepted=env.improvements,steps=0 if method=='RCM' else steps,refinement_sec=secs,rcm_sec=rcm_sec,total_inference_sec=secs+rcm_sec))
                     for a,v in enumerate(num):actions.append(dict(graph=name,seed=seed,rep=rep,method=method,arm=a,count=v))
