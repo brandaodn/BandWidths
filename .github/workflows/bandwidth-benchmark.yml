@@ -1,10 +1,11 @@
 name: BandWidths - RCM refinement benchmark
 
 on:
-  pull_request:
+  push:
+    branches:
+      - feat/rcm-actions-benchmark-20261120
     paths:
       - '.github/workflows/bandwidth-benchmark.yml'
-      - 'benchmarks/**'
   workflow_dispatch:
     inputs:
       mode:
@@ -62,7 +63,7 @@ jobs:
       - run: pip install -r benchmarks/requirements-actions.txt
       - name: Validate Matrix Market files and select evaluation set
         env:
-          MODE: ${{ inputs.mode || 'pilot' }}
+          MODE: ${{ github.event_name == 'push' && 'full' || inputs.mode || 'pilot' }}
           MAX_N: ${{ inputs.max_n || 800 }}
           MAX_EDGES: ${{ inputs.max_edges || 12000 }}
         run: |
@@ -83,8 +84,8 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        seed_index: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4]') }}
-        steps: ${{ fromJSON(inputs.mode != 'full' && '[100]' || '[100,250,500]') }}
+        seed_index: ${{ fromJSON((github.event_name != 'push' && inputs.mode != 'full') && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON((github.event_name != 'push' && inputs.mode != 'full') && '[100]' || '[100,250,500]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -122,9 +123,9 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        seed_index: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4]') }}
-        steps: ${{ fromJSON(inputs.mode != 'full' && '[100]' || '[100,250,500]') }}
-        shard: ${{ fromJSON(inputs.mode != 'full' && '[0]' || '[0,1,2,3,4,5]') }}
+        seed_index: ${{ fromJSON((github.event_name != 'push' && inputs.mode != 'full') && '[0]' || '[0,1,2,3,4]') }}
+        steps: ${{ fromJSON((github.event_name != 'push' && inputs.mode != 'full') && '[100]' || '[100,250,500]') }}
+        shard: ${{ fromJSON((github.event_name != 'push' && inputs.mode != 'full') && '[0]' || '[0,1,2,3,4,5]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -144,7 +145,7 @@ jobs:
       - name: Evaluate all policies with identical proposal budgets
         env:
           REPS: ${{ inputs.reps || 2 }}
-          MODE: ${{ inputs.mode || 'pilot' }}
+          MODE: ${{ github.event_name == 'push' && 'full' || inputs.mode || 'pilot' }}
         run: |
           if [ "$MODE" = pilot ]; then SHARDS=1; else SHARDS=6; fi
           python benchmarks/rcm_actions.py evaluate \
